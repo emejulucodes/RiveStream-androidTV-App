@@ -24,6 +24,7 @@ a low-powered TV box responsive.
 - [Design decisions that are not obvious](#design-decisions-that-are-not-obvious)
 - [Performance](#performance)
 - [Testing](#testing)
+- [CI and releases](#ci-and-releases)
 - [Known limitations](#known-limitations)
 - [Troubleshooting](#troubleshooting)
 - [Maintenance](#maintenance)
@@ -387,6 +388,83 @@ flutter run -d emulator-5554 --debug 2>&1 | grep '\[web\]'
 ```
 
 ---
+
+## CI and releases
+
+`.github/workflows/build-release.yml` runs on every push and pull request to `main`.
+
+```
+push / PR ──▶ analyze + test ──▶ (push only) build APK ──▶ GitHub Release
+                    │
+                    └── fails ──▶ nothing is published
+```
+
+The `release` job `needs: test`, so a failing `flutter analyze` or `flutter test` blocks
+publication. Pull requests run the gate only.
+
+### Versioning
+
+Each release is `<major>.<minor>.<run_number>`, where major/minor come from `pubspec.yaml`
+and the run number is GitHub's monotonically increasing counter:
+
+| pubspec `version:` | CI run | Tag | Android `versionCode` |
+|---|---|---|---|
+| `1.0.0+1` | 7 | `v1.0.7` | 7 |
+| `1.0.0+1` | 8 | `v1.0.8` | 8 |
+| `1.1.0+1` | 9 | `v1.1.9` | 9 |
+
+`versionCode` must increase monotonically or Android refuses the install as an upgrade — the run
+number guarantees that. To start a new series, bump major/minor in `pubspec.yaml`; the committed
+`+1` build number is only a local placeholder and is overridden in CI.
+
+Concurrency is set to cancel in-flight runs on the same ref, so a rapid second push cannot
+publish a lower version after a higher one.
+
+### Signing (recommended before sharing builds)
+
+Without a keystore the APK is signed with a **debug key that is regenerated on every CI runner**.
+Each release then has a different signature, and installing one over another fails with a
+signature mismatch — users must uninstall first. The workflow emits a warning and says so in the
+release notes when this is the case.
+
+To fix it, create a keystore once:
+
+```bash
+keytool -genkey -v -keystore rivestream-release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias rivestream
+```
+
+Base64-encode it:
+
+```bash
+base64 -i rivestream-release.jks | pbcopy
+```
+
+Then add four **repository secrets** (Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+|---|---|
+| `KEYSTORE_BASE64` | the base64 string |
+| `KEYSTORE_PASSWORD` | keystore password |
+| `KEY_ALIAS` | `rivestream` |
+| `KEY_PASSWORD` | key password |
+
+CI writes `android/key.properties` from these and `build.gradle.kts` picks it up automatically;
+local builds without the file keep using the debug fallback. **Keep the `.jks` and
+`key.properties` out of git** — both are already in `.gitignore`. Losing the keystore means you
+can never ship an upgrade to installed users.
+
+### Local release build
+
+The same artifact can be produced locally; see [Build and run](#build-and-run). To sign it
+locally, place your keystore at `android/app/release-keystore.jks` and create
+`android/key.properties`:
+
+```
+storePassword=...
+keyPassword=...
+keyAlias=rivestream
+storeFile=release-keystore.jks
+```
 
 ## Known limitations
 
